@@ -8,9 +8,9 @@ A multi-notebook project exploring image classification on the CIFAR-10 dataset,
 
 ```
 cnn_project/
-├── cnn_transfer_learning.ipynb   # Main notebook: custom CNN + transfer learning comparison
-├── data_augmentation.ipynb       # Extension: ResNet50 with augmented training data
-└── test.ipynb                    # PyTorch experiment: custom CNN with GPU-cached data
+├── cnn_transfer_learning.ipynb              # Main notebook: custom CNN + transfer learning comparison
+├── cnn_transfer_data_augmentation.ipynb     # Extension: ResNet50 with advanced augmentation pipeline
+└── test.ipynb                               # PyTorch experiment: custom CNN with GPU-cached data
 ```
 
 ---
@@ -132,32 +132,46 @@ The most sophisticated approach in the notebook, using a **two-phase training st
 
 ---
 
-## Notebook 2: `data_augmentation.ipynb`
+## Notebook 2: `cnn_transfer_data_augmentation.ipynb`
 
-This notebook extends the ResNet50 experiment by applying **online data augmentation** to the training pipeline, effectively doubling the training set size.
+This notebook refines the ResNet50 experiment with a more sophisticated augmentation pipeline and a redesigned two-phase training strategy.
 
 ### Augmentation Techniques Applied
 
 | Technique | Parameters |
 |---|---|
 | Random Horizontal Flip | 50% probability |
-| Random Rotation | ±20° |
+| Random Rotation | ±15° |
 | Random Zoom | ±10% |
 | Random Translation | ±10% horizontal and vertical |
+| Random Contrast | ±20% |
+| Random Brightness | ±20% |
 
-### Data Pipeline
+Augmentation is applied to raw pixel values **before** resizing and normalization, which is the correct order to avoid artifacts from normalizing before geometric transforms.
 
-The original training dataset (50,000 images) and an augmented copy were both created and concatenated, yielding **100,000 training samples** per epoch. The test set was kept unaugmented.
+### Two-Phase Strategy (Redesigned)
 
-### Training
+**Phase 1 — Head Training on Clean Data:**
 
-The same two-phase ResNet50 strategy from Notebook 1 was applied on the combined dataset:
+A key insight over the previous approach: the head is first trained on **non-augmented** data to allow fast, stable convergence of the new classifier layers. Training on augmented data at this stage slows convergence unnecessarily since the backbone is frozen anyway.
 
-**Phase 1 (Head only, 1e-3 LR):** The model trained across all 10 epochs without early stopping, reaching ~86.65% validation accuracy.
+- Max epochs: 15, patience: 5
+- Best val accuracy: **~86.9%** (epoch 10)
 
-**Phase 2 (Fine-tuning top 30 layers, 1e-5 LR):** Early stopping triggered mid-training after validation accuracy improved to ~88.0%.
+**Phase 2 — Fine-Tuning on Augmented Data + LR Scheduler:**
 
-The augmented pipeline trades faster convergence for slower per-epoch time (roughly 2× as many batches), but is expected to improve generalization and robustness to real-world image variation.
+Once the head has converged, the top 30 ResNet50 layers are unfrozen and trained on the **augmented** dataset. A `ReduceLROnPlateau` scheduler halves the learning rate whenever validation loss stops improving for 3 consecutive epochs:
+
+| LR Stage | Epochs | Val Accuracy Range |
+|---|---|---|
+| 1e-5 | 1–23 | 84.9% → 89.9% |
+| 5e-6 | 24–31 | 90.1% → 90.3% |
+| 2.5e-6 | 32–34 | ~90.3% |
+
+- Best val accuracy: **~90.31%** (epoch 28–30)
+- Early stopping triggered after epoch 34 (patience=6)
+
+The LR scheduler proves decisive: allowing the model to escape plateaus by reducing the learning rate enabled the jump from ~89.9% to **90.3%**, which is the best result across all experiments.
 
 ---
 
@@ -199,8 +213,8 @@ torch.save((train_images, train_labels), "cifar10_train_cached.pt")
 | MobileNetV2 (frozen) | TensorFlow Hub | ~85.5% | ~3.4M | Feature extractor only |
 | InceptionV3 (frozen) | TensorFlow Hub | ~86.4% | ~21.8M | Feature extractor only |
 | ResNet50 (Phase 1) | TensorFlow/Keras | ~86.8% | 263K trainable | Head only |
-| ResNet50 (Phase 2, fine-tuned) | TensorFlow/Keras | **~89.6%** | ~23.9M | Best result |
-| ResNet50 + Augmentation | TensorFlow/Keras | ~88.0% | ~23.9M | 2× training data |
+| ResNet50 (Phase 2, fine-tuned) | TensorFlow/Keras | ~89.6% | ~23.9M | No augmentation |
+| ResNet50 + Augmentation + LR Scheduler | TensorFlow/Keras | **~90.3%** | ~23.9M | **Best result** |
 | Custom CNN (PyTorch) | PyTorch | N/A (error) | ~600K | GPU-cached pipeline |
 
 ---
@@ -213,7 +227,7 @@ torch.save((train_images, train_labels), "cifar10_train_cached.pt")
 
 **Input resolution matters for small images.** The CIFAR-10 images are only 32×32 pixels. Resizing to 96×96 (used for ResNet50) introduces less interpolation distortion than 224×224 (used for MobileNetV2 and InceptionV3), which may partly explain ResNet50's edge despite being trained on the same frozen backbone concept.
 
-**Data augmentation adds robustness but slows convergence.** The augmented ResNet50 experiment shows slightly lower peak accuracy in the runs captured (~88%), likely because the augmented data introduces harder examples that require more epochs to converge. With sufficient training time, augmentation is expected to improve generalization on unseen data.
+**Augmentation + LR scheduling is the winning combination.** The redesigned augmentation notebook achieves the best result at ~90.3%. Three factors contribute: (1) applying augmentation only during Phase 2 (fine-tuning) rather than Phase 1 lets the head converge cleanly first; (2) augmenting before resize/normalize avoids pixel-range artifacts; (3) `ReduceLROnPlateau` breaks through training plateaus by halving the learning rate, enabling the final push from ~89.9% to 90.3%.
 
 ---
 
@@ -240,6 +254,6 @@ pip install tensorflow tensorflow-hub scikit-learn matplotlib numpy torch torchv
 ## How to Reproduce
 
 1. Open `cnn_transfer_learning.ipynb` and run all cells in order. The CIFAR-10 dataset is downloaded automatically via `tf.keras.datasets.cifar10.load_data()`.
-2. Open `data_augmentation.ipynb` for the augmented ResNet50 experiment.
+2. Open `cnn_transfer_data_augmentation.ipynb` for the augmented ResNet50 experiment.
 3. For the PyTorch pipeline in `test.ipynb`, run the caching cell first, then restart the kernel before running the training cell (or run all cells in a single session without interruption).
 
